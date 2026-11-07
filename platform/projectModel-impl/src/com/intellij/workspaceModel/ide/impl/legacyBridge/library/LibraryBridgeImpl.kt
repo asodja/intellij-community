@@ -17,6 +17,7 @@ import com.intellij.openapi.roots.libraries.LibraryTable
 import com.intellij.openapi.roots.libraries.PersistentLibraryKind
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.TraceableDisposable
+import com.intellij.openapi.util.registry.Registry
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.backend.workspace.WorkspaceModel
 import com.intellij.platform.eel.EelMachine
@@ -59,7 +60,7 @@ class LibraryBridgeImpl(
   initialId: LibraryId,
   initialEntityStorage: VersionedEntityStorage,
   private var targetBuilder: MutableEntityStorage?,
-) : LibraryBridge, RootProvider, TraceableDisposable(true), Disposable {
+) : LibraryBridge, RootProvider, TraceableDisposable(traceLibraryBridges), Disposable {
 
   override fun getModule(): Module? = (libraryTable as? ModuleLibraryTableBridge)?.module
 
@@ -225,6 +226,11 @@ class LibraryBridgeImpl(
 
   companion object {
     private val libraryRootTypes = ConcurrentFactoryMap.createMap<String, LibraryRootTypeId> { LibraryRootTypeId(it) }
+
+    // A creation and a disposal stack trace per bridge only serve the "already disposed" diagnostics in checkDisposed().
+    //   A modifiable root model creates one bridge per module library, so with many module libraries the traces
+    //   cost more than the rest of the bridge; they are opt-in.
+    private val traceLibraryBridges: Boolean by lazy { Registry.`is`("ide.workspace.model.library.bridge.traces", false) }
 
     fun OrderRootType.toLibraryRootType(): LibraryRootTypeId = when (this) {
       OrderRootType.CLASSES -> LibraryRootTypeId.COMPILED
