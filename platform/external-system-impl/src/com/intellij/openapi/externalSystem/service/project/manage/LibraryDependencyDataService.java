@@ -25,6 +25,7 @@ import com.intellij.openapi.roots.libraries.Library;
 import com.intellij.openapi.roots.libraries.LibraryTable;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.openapi.vfs.VirtualFileManager;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -118,10 +119,23 @@ public final class LibraryDependencyDataService extends AbstractDependencyDataSe
     @NotNull IdeModifiableModelsProvider modelsProvider
   ) {
     Library library = entry.getLibrary();
-    VirtualFile[] libraryFiles = library.getFiles(OrderRootType.CLASSES);
-    Set<String> moduleLibraryKey = new HashSet<>(libraryFiles.length);
-    for (VirtualFile file : libraryFiles) {
-      moduleLibraryKey.add(ExternalSystemApiUtil.getLocalFileSystemPath(file) + entry.getScope().name());
+    String[] libraryUrls = library.getUrls(OrderRootType.CLASSES);
+    Set<String> moduleLibraryKey = new HashSet<>(libraryUrls.length);
+    VirtualFileManager virtualFileManager = VirtualFileManager.getInstance();
+    for (String url : libraryUrls) {
+      VirtualFile file = virtualFileManager.findFileByUrl(url);
+      String path;
+      if (file != null) {
+        path = ExternalSystemApiUtil.getLocalFileSystemPath(file);
+      }
+      else {
+        // A root whose file does not exist (for example a jar that has not been built yet) has no VirtualFile.
+        // Leaving it out of the key made the key differ from the one preProcessData builds, so the entry
+        // was removed and recreated on every import. LibraryDataService.registerPaths built this URL from the
+        // same path that preProcessData puts into its key, so the URL gives that key back.
+        path = ExternalSystemApiUtil.toCanonicalPath(LibraryDataService.getLocalPath(url));
+      }
+      moduleLibraryKey.add(path + entry.getScope().name());
     }
     LibraryDependencyData existing = moduleLibrariesToImport.remove(moduleLibraryKey);
     if (existing == null || !StringUtil.equals(StringUtil.nullize(existing.getInternalName()), library.getName())) {

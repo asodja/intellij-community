@@ -318,7 +318,7 @@ public final class LibraryDataService extends AbstractProjectDataService<Library
     }
   }
 
-  private static @NotNull String getLocalPath(@NotNull String url) {
+  static @NotNull String getLocalPath(@NotNull String url) {
     if (url.startsWith(StandardFileSystems.JAR_PROTOCOL_PREFIX)) {
       url = StringUtil.trimEnd(url, JarFileSystem.JAR_SEPARATOR);
     }
