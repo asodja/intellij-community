@@ -114,6 +114,7 @@ internal suspend fun addScripts(
             this.relatedModuleIds = getRelatedModules(model, sourceRootIndex, contentRootIndex).toMutableList()
         }
     }
+    libraries.flush()
 }
 
 private fun getRelatedModules(
@@ -212,20 +213,37 @@ internal class ScriptLibraries(
         }
     }
 
+    private val pendingSources = LinkedHashMap<KotlinScriptLibraryEntityId, LinkedHashSet<VirtualFileUrl>>()
+    private val pendingScripts = HashMap<KotlinScriptLibraryEntityId, LinkedHashSet<VirtualFileUrl>>()
+
     private fun addLibrary(scriptUrl: VirtualFileUrl, classes: List<VirtualFileUrl>, sources: Collection<VirtualFileUrl>): KotlinScriptLibraryEntityId {
         val id = KotlinScriptLibraryEntityId(scope, classes)
-        val existing = storage.resolve(id)
-        if (existing == null) {
-            storage addEntity KotlinScriptLibraryEntity(scope = scope, classes = classes, usedInScripts = setOf(scriptUrl), entitySource = entitySource) {
-                this.sources += sources
-            }
-        } else {
-            storage.modifyKotlinScriptLibraryEntity(existing) {
-                this.sources += sources
-                this.usedInScripts += scriptUrl
+        pendingSources.getOrPut(id) { LinkedHashSet() } += sources
+        pendingScripts.getOrPut(id) { LinkedHashSet() } += scriptUrl
+        return id
+    }
+
+    /**
+     * Writes one entity per library. A library shared by all scripts of a build would otherwise be
+     * copied once per script, with a growing [KotlinScriptLibraryEntity.usedInScripts] each time.
+     */
+    fun flush() {
+        for ((id, sources) in pendingSources) {
+            val usedInScripts = pendingScripts.getValue(id)
+            val existing = storage.resolve(id)
+            if (existing == null) {
+                storage addEntity KotlinScriptLibraryEntity(scope = scope, classes = id.classes, usedInScripts = usedInScripts, entitySource = entitySource) {
+                    this.sources += sources
+                }
+            } else {
+                storage.modifyKotlinScriptLibraryEntity(existing) {
+                    this.sources += sources
+                    this.usedInScripts += usedInScripts
+                }
             }
         }
-        return id
+        pendingSources.clear()
+        pendingScripts.clear()
     }
 
     private fun <T> MutableCollection<T>.extract(predicate: (T) -> Boolean): List<T> = filter(predicate).also { removeAll(it) }
