@@ -47,8 +47,11 @@ import org.jetbrains.plugins.gradle.tooling.ModelBuilderContext;
 import org.jetbrains.plugins.gradle.tooling.util.StringUtils;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -61,6 +64,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Stream;
 
 @ApiStatus.Internal
 public class GradleSourceSetModelBuilder extends AbstractModelBuilderService {
@@ -68,6 +72,8 @@ public class GradleSourceSetModelBuilder extends AbstractModelBuilderService {
   private static final String JVM_TEST_SUITE_PLUGIN_ID = "jvm-test-suite";
   private static final String TESTING_EXTENSION_CLASS = "org.gradle.testing.base.TestingExtension";
   private static final String JVM_TEST_SUITE_CLASS = "org.gradle.api.plugins.jvm.JvmTestSuite";
+  // A copy spec source that could not be read; it keeps the jar, like any source that cannot be classified
+  private static final Object UNKNOWN_SOURCE = new Object();
 
   @Override
   public boolean canBuild(String modelName) {
@@ -334,11 +340,14 @@ public class GradleSourceSetModelBuilder extends AbstractModelBuilderService {
     }
     HashSet<File> outputFiles = new HashSet<>();
     sourceSetContainer.all(ss -> outputFiles.addAll(ss.getOutput().getFiles()));
-    for (Object path : getArchiveTaskSourcePaths(archiveTask)) {
+    // Child specs are inspected too, and only class files count: the module dependency already provides the
+    // source set output, and resources added to the jar (pom.properties, generated metadata) do not change resolution.
+    // A directory is walked instead of being assumed to hold classes.
+    for (Object path : getArchiveTaskSourcePathsRecursively(archiveTask)) {
       if (isSafeToResolve(path, project) || isResolvableFileCollection(path, project)) {
         for (File f : project.files(path).getFiles()) {
           if (outputFiles.contains(f)) continue;
-          if (f.isDirectory() || (f.isFile() && f.getName().endsWith(".class"))) {
+          if (isClassFile(f) || (f.isDirectory() && containsClassFiles(f))) {
             return true;
           }
         }
@@ -348,6 +357,52 @@ public class GradleSourceSetModelBuilder extends AbstractModelBuilderService {
       }
     }
     return false;
+  }
+
+  private static boolean isClassFile(@NotNull File file) {
+    return file.isFile() && file.getName().endsWith(".class");
+  }
+
+  private static boolean containsClassFiles(@NotNull File directory) {
+    try (Stream<Path> paths = Files.walk(directory.toPath())) {
+      return paths.limit(10_000).anyMatch(it -> it.getFileName().toString().endsWith(".class"));
+    }
+    catch (IOException | UncheckedIOException e) {
+      return true;
+    }
+  }
+
+  private static Set<Object> getArchiveTaskSourcePathsRecursively(AbstractArchiveTask archiveTask) {
+    Set<Object> result = new LinkedHashSet<>();
+    try {
+      final Method mainSpecGetter = AbstractCopyTask.class.getDeclaredMethod("getMainSpec");
+      mainSpecGetter.setAccessible(true);
+      collectSourcePaths(mainSpecGetter.invoke(archiveTask), result, 0);
+    }
+    catch (InvocationTargetException | NoSuchMethodException | IllegalAccessException ignored) {
+      result.add(UNKNOWN_SOURCE);
+    }
+    return result;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static void collectSourcePaths(@Nullable Object spec, @NotNull Set<Object> result, int depth) {
+    if (spec == null || depth > 32) return;
+    try {
+      Set<Object> sourcePaths = (Set<Object>)spec.getClass().getMethod("getSourcePaths").invoke(spec);
+      if (sourcePaths != null) {
+        result.addAll(sourcePaths);
+      }
+      Iterable<Object> children = (Iterable<Object>)spec.getClass().getMethod("getChildren").invoke(spec);
+      if (children != null) {
+        for (Object child : children) {
+          collectSourcePaths(child, result, depth + 1);
+        }
+      }
+    }
+    catch (InvocationTargetException | NoSuchMethodException | IllegalAccessException ignored) {
+      result.add(UNKNOWN_SOURCE);
+    }
   }
 
   private static boolean containsAllSourceSetOutput(@NotNull AbstractArchiveTask archiveTask, @NotNull SourceSet sourceSet) {
@@ -416,6 +471,7 @@ public class GradleSourceSetModelBuilder extends AbstractModelBuilderService {
            object instanceof File ||
            object instanceof Path ||
            object instanceof SourceSetOutput ||
+           object instanceof Task || // resolves to the task outputs
            GradleReflectionUtil.isInstance(object, "org.gradle.api.file.Directory") ||
            GradleReflectionUtil.isInstance(object, "org.gradle.api.file.RegularFile");
   }
