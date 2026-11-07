@@ -84,7 +84,9 @@ public class LibraryDataNodeSubstitutor {
     }
 
     boolean shouldKeepTransitiveDependencies = !libraryDependencyDataNode.getChildren().isEmpty();
-    Collection<AbstractDependencyData<?>> dependenciesToShift = collectDependenciesOrderedAfter(libraryNodeParent, libraryDependencyData.getOrder());
+    // Collected after the loop, and only when there is a shift, because scanning the module's dependencies
+    // for every library dependency is quadratic. The module dependencies created in the loop are excluded.
+    List<DataNode<ModuleDependencyData>> createdModuleDependencies = new SmartList<>();
 
     int classpathOrderShift = -1;
     final ArrayDeque<String> unprocessedPaths = new ArrayDeque<>(libraryPaths);
@@ -92,9 +94,11 @@ public class LibraryDataNodeSubstitutor {
       final String path = unprocessedPaths.remove();
       Collection<ModuleLookupResult> lookupResults = lookupTargetModule(path);
       for (ModuleLookupResult result : lookupResults) {
-        if (createAndMaybeAttachNewModuleDependency(libraryDependencyDataNode, result, libraryPaths,
-                                                    shouldKeepTransitiveDependencies,
-                                                    unprocessedPaths, classpathOrderShift, path)) {
+        DataNode<ModuleDependencyData> created = createAndMaybeAttachNewModuleDependency(libraryDependencyDataNode, result, libraryPaths,
+                                                                                         shouldKeepTransitiveDependencies,
+                                                                                         unprocessedPaths, classpathOrderShift, path);
+        if (created != null) {
+          createdModuleDependencies.add(created);
           classpathOrderShift++;
         }
       }
@@ -109,7 +113,11 @@ public class LibraryDataNodeSubstitutor {
       }
     }
 
-    applyClasspathShift(dependenciesToShift, classpathOrderShift);
+    if (classpathOrderShift > 0) {
+      Collection<AbstractDependencyData<?>> dependenciesToShift =
+        collectDependenciesOrderedAfter(libraryNodeParent, libraryDependencyData.getOrder(), createdModuleDependencies);
+      applyClasspathShift(dependenciesToShift, classpathOrderShift);
+    }
 
     if (libraryDependencyDataNode.getParent() != null) {
       if (libraryPaths.size() > 1) {
@@ -137,27 +145,41 @@ public class LibraryDataNodeSubstitutor {
     }
   }
 
-  private static Collection<AbstractDependencyData<?>> collectDependenciesOrderedAfter(@NotNull DataNode<?> parent, int order) {
-    return ContainerUtil.mapNotNull(parent.getChildren(), it -> {
-        if (it.getData() instanceof AbstractDependencyData<?> depData && depData.getOrder() > order) {
-          return depData;
-        }
-        return null;
-    });
+  private static Collection<AbstractDependencyData<?>> collectDependenciesOrderedAfter(@NotNull DataNode<?> parent,
+                                                                                      int order,
+                                                                                      @NotNull List<? extends DataNode<?>> excluded) {
+    List<AbstractDependencyData<?>> result = new ArrayList<>();
+    for (DataNode<?> child : parent.getChildren()) {
+      if (child.getData() instanceof AbstractDependencyData<?> depData && depData.getOrder() > order && !containsIdentity(excluded, child)) {
+        result.add(depData);
+      }
+    }
+    return result;
   }
 
-  private static boolean createAndMaybeAttachNewModuleDependency(@NotNull DataNode<LibraryDependencyData> libraryDependencyDataNode,
-                                                                 @NotNull ModuleLookupResult lookupResult,
-                                                                 @NotNull Set<String> libraryPaths,
-                                                                 boolean shouldKeepTransitiveDependencies,
-                                                                 @NotNull ArrayDeque<String> unprocessedPaths,
-                                                                 int classpathOrderShift, String path) {
+  private static boolean containsIdentity(@NotNull List<? extends DataNode<?>> nodes, @NotNull DataNode<?> node) {
+    for (DataNode<?> candidate : nodes) {
+      if (candidate == node) return true;
+    }
+    return false;
+  }
 
-    boolean addedNewDependency = false;
+  /**
+   * @return the created module dependency node, or null when an equal one already exists
+   */
+  private static @Nullable DataNode<ModuleDependencyData> createAndMaybeAttachNewModuleDependency(
+    @NotNull DataNode<LibraryDependencyData> libraryDependencyDataNode,
+    @NotNull ModuleLookupResult lookupResult,
+    @NotNull Set<String> libraryPaths,
+    boolean shouldKeepTransitiveDependencies,
+    @NotNull ArrayDeque<String> unprocessedPaths,
+    int classpathOrderShift, String path) {
+
+    DataNode<ModuleDependencyData> moduleDependencyNode = null;
     LibraryDependencyData libraryDependencyData = libraryDependencyDataNode.getData();
     DataNode<?> libraryNodeParent = libraryDependencyDataNode.getParent();
     if (libraryNodeParent == null) {
-      return addedNewDependency;
+      return null;
     }
 
     DataNode<GradleSourceSetData> targetSourceSetNode = lookupResult.sourceSetDataDataNode();
@@ -200,9 +222,7 @@ public class LibraryDataNodeSubstitutor {
       });
 
     if (found == null) {
-      DataNode<ModuleDependencyData> moduleDependencyNode =
-        libraryNodeParent.createChild(ProjectKeys.MODULE_DEPENDENCY, moduleDependencyData);
-      addedNewDependency = true;
+      moduleDependencyNode = libraryNodeParent.createChild(ProjectKeys.MODULE_DEPENDENCY, moduleDependencyData);
       if (shouldKeepTransitiveDependencies) {
         for (DataNode<?> node : libraryDependencyDataNode.getChildren()) {
           moduleDependencyNode.addChild(node);
@@ -214,7 +234,7 @@ public class LibraryDataNodeSubstitutor {
       unprocessedPaths.removeAll(targetModuleOutputPaths);
       libraryPaths.removeAll(targetModuleOutputPaths);
     }
-    return addedNewDependency;
+    return moduleDependencyNode;
   }
 
   private static boolean isEqualIgnoringScope(@NotNull ModuleDependencyData data1, @NotNull ModuleDependencyData data2) {
