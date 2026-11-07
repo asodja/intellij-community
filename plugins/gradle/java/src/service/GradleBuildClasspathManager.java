@@ -66,7 +66,7 @@ public class GradleBuildClasspathManager {
     for (final ExternalProjectBuildClasspathPojo projectBuildClasspathPojo : buildClasspathManager.getProjectBuildClasspath().values()) {
       final List<VirtualFile> projectBuildClasspath = new ArrayList<>();
       for (String path : projectBuildClasspathPojo.getProjectBuildClasspath()) {
-        final VirtualFile virtualFile = localVFCache.computeIfAbsent(path, it -> ExternalSystemUtil.findLocalFileByPath(it));
+        final VirtualFile virtualFile = findLocalFile(path, localVFCache);
         ContainerUtil.addIfNotNull(projectBuildClasspath,
                                    virtualFile == null || virtualFile.isDirectory()
                                    ? virtualFile
@@ -78,7 +78,7 @@ public class GradleBuildClasspathManager {
         List<VirtualFile> moduleBuildClasspath = moduleClasspathCache.computeIfAbsent(moduleBuildClasspathPojo.getEntries(), entries -> {
           final List<VirtualFile> classpath = new ArrayList<>(projectBuildClasspath);
           for (String path : entries) {
-            final VirtualFile virtualFile = localVFCache.computeIfAbsent(path, it -> ExternalSystemUtil.findLocalFileByPath(it));
+            final VirtualFile virtualFile = findLocalFile(path, localVFCache);
             ContainerUtil.addIfNotNull(classpath,
                                        virtualFile == null || virtualFile.isDirectory()
                                        ? virtualFile
@@ -99,6 +99,19 @@ public class GradleBuildClasspathManager {
     }
     allFilesCache = new ArrayList<>(set);
     myClassFinderCache.clear();
+  }
+
+  /**
+   * Caches absent files too. {@code computeIfAbsent} does not store a null result, so an absent path
+   * (for example a declared source directory that does not exist) was refreshed from disk again for every module.
+   */
+  private static @Nullable VirtualFile findLocalFile(@NotNull String path, @NotNull Map<String, VirtualFile> cache) {
+    if (cache.containsKey(path)) {
+      return cache.get(path);
+    }
+    VirtualFile file = ExternalSystemUtil.findLocalFileByPath(path);
+    cache.put(path, file);
+    return file;
   }
 
   public @NotNull Map<String, PackageDirectoryCache> getClassFinderCache() {
