@@ -228,12 +228,14 @@ internal class MutableEntityStorageImpl(
     return indexes.softLinks.getIdsByEntry(id).isNotEmpty()
   }
 
+  // Not measured: this is called per order entry during an import, and two clock reads per call
+  //   cost more than the lookup itself.
   @Suppress("UNCHECKED_CAST")
-  override fun <E : WorkspaceEntityWithSymbolicId> resolve(id: SymbolicEntityId<E>): E? = resolveTimeMs.addMeasuredTime {
-    val entityIds = indexes.symbolicIdIndex.getIdsByEntry(id) ?: return@addMeasuredTime null
+  override fun <E : WorkspaceEntityWithSymbolicId> resolve(id: SymbolicEntityId<E>): E? {
+    val entityIds = indexes.symbolicIdIndex.getIdsByEntry(id) ?: return null
     val entityData: WorkspaceEntityData<WorkspaceEntity> = entityDataById(entityIds) as? WorkspaceEntityData<WorkspaceEntity>
-                                                           ?: return@addMeasuredTime null
-    return@addMeasuredTime entityData.createEntity(this) as E?
+                                                           ?: return null
+    return entityData.createEntity(this) as E?
   }
 
   override fun entitiesBySource(sourceFilter: (EntitySource) -> Boolean): Sequence<WorkspaceEntity> {
@@ -949,7 +951,6 @@ internal class MutableEntityStorageImpl(
     private val getEntitiesTimeMs = MillisecondsMeasurer()
     private val getReferrersTimeMs = MillisecondsMeasurer()
     private val hasReferrersTimeMs = MillisecondsMeasurer()
-    private val resolveTimeMs = MillisecondsMeasurer()
     private val getEntitiesBySourceTimeMs = MillisecondsMeasurer()
     private val addEntityTimeMs = MillisecondsMeasurer()
     private val putEntityTimeMs = MillisecondsMeasurer()
@@ -968,7 +969,6 @@ internal class MutableEntityStorageImpl(
       val getEntitiesTimeCounter = meter.counterBuilder("workspaceModel.mutableEntityStorage.entities.ms").buildObserver()
       val getReferrersTimeCounter = meter.counterBuilder("workspaceModel.mutableEntityStorage.referrers.ms").buildObserver()
       val hasReferrersTimeCounter = meter.counterBuilder("workspaceModel.mutableEntityStorage.hasReferrers.ms").buildObserver()
-      val resolveTimeCounter = meter.counterBuilder("workspaceModel.mutableEntityStorage.resolve.ms").buildObserver()
       val getEntitiesBySourceTimeCounter = meter.counterBuilder("workspaceModel.mutableEntityStorage.entities.by.source.ms").buildObserver()
       val addEntityTimeCounter = meter.counterBuilder("workspaceModel.mutableEntityStorage.add.entity.ms").buildObserver()
       val putEntityTimeCounter = meter.counterBuilder("workspaceModel.mutableEntityStorage.put.entity.ms").buildObserver()
@@ -988,7 +988,6 @@ internal class MutableEntityStorageImpl(
           getEntitiesTimeCounter.record(getEntitiesTimeMs.asMilliseconds())
           getReferrersTimeCounter.record(getReferrersTimeMs.asMilliseconds())
           hasReferrersTimeCounter.record(hasReferrersTimeMs.asMilliseconds())
-          resolveTimeCounter.record(resolveTimeMs.asMilliseconds())
           getEntitiesBySourceTimeCounter.record(getEntitiesBySourceTimeMs.asMilliseconds())
           addEntityTimeCounter.record(addEntityTimeMs.asMilliseconds())
           putEntityTimeCounter.record(putEntityTimeMs.asMilliseconds())
@@ -1003,7 +1002,7 @@ internal class MutableEntityStorageImpl(
           getMutableVFUrlIndexTimeCounter.record(getMutableVFUrlIndexTimeMs.asMilliseconds())
         },
         instancesCountCounter, getEntitiesTimeCounter, getReferrersTimeCounter,
-        hasReferrersTimeCounter, resolveTimeCounter,
+        hasReferrersTimeCounter,
         getEntitiesBySourceTimeCounter, addEntityTimeCounter,
         putEntityTimeCounter, modifyEntityTimeCounter, removeEntityTimeCounter, replaceBySourceTimeCounter,
         collectChangesTimeCounter, hasSameEntitiesTimeCounter, toSnapshotTimeCounter, applyChangesFromTimeCounter,
