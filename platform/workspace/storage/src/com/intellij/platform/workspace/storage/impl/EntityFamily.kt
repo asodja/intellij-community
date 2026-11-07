@@ -3,6 +3,7 @@ package com.intellij.platform.workspace.storage.impl
 
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.platform.workspace.storage.WorkspaceEntity
+import it.unimi.dsi.fastutil.ints.IntLinkedOpenHashSet
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet
 import it.unimi.dsi.fastutil.ints.IntSet
 
@@ -32,8 +33,10 @@ internal class MutableEntityFamily<E : WorkspaceEntity>(
 
   // This set contains empty slots at the moment of MutableEntityFamily creation
   //   New empty slots MUST NOT be added this this set, otherwise it would be impossible to distinguish (remove + add) and (replace) events
-  private val availableSlots: IntSet = IntOpenHashSet().also {
-    entities.mapIndexed { index, pEntityData -> if (pEntityData == null) it.add(index) }
+  // Linked, so that taking the first slot is O(1). Popping through the iterator of a plain hash set has to scan
+  //   for an occupied bucket, and after each pop that scan gets longer, which is quadratic when many entities are added at once.
+  private val availableSlots: IntLinkedOpenHashSet = IntLinkedOpenHashSet().also {
+    entities.forEachIndexed { index, pEntityData -> if (pEntityData == null) it.add(index) }
   }
 
   // Current amount of nulls in entities
@@ -157,12 +160,9 @@ internal class MutableEntityFamily<E : WorkspaceEntity>(
     freezed = false
   }
 
-  private fun IntSet.pop(): Int {
-    val iterator = this.iterator()
-    if (!iterator.hasNext()) error("Set is empty")
-    val res = iterator.nextInt()
-    iterator.remove()
-    return res
+  private fun IntLinkedOpenHashSet.pop(): Int {
+    if (isEmpty()) error("Set is empty")
+    return removeFirstInt()
   }
 
   companion object {
