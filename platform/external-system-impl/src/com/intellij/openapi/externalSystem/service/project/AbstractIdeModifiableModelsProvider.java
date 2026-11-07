@@ -146,6 +146,11 @@ public abstract class AbstractIdeModifiableModelsProvider extends IdeModelsProvi
   @Override
   public @Nullable Library findIdeLibrary(@NotNull LibraryData libraryData) {
     final LibraryTable.ModifiableModel libraryTable = getModifiableProjectLibrariesModel();
+    // Indexed lookup first: getLibraries() of the modifiable model is recomputed on every call by scanning all library entities.
+    Library byName = libraryTable.getLibraryByName(libraryData.getInternalName());
+    if (byName != null && ExternalSystemApiUtil.isRelated(byName, libraryData)) {
+      return byName;
+    }
     for (Library ideLibrary: libraryTable.getLibraries()) {
       if (ExternalSystemApiUtil.isRelated(ideLibrary, libraryData)) return ideLibrary;
     }
