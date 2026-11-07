@@ -254,13 +254,18 @@ public final class LibraryDependencyDataService extends AbstractDependencyDataSe
   private static @Nullable LibraryOrderEntry findLibraryOrderEntry(@NotNull ModifiableRootModel moduleRootModel,
                                                                    @NotNull Library library,
                                                                    @NotNull DependencyScope scope) {
+    OrderEntry[] orderEntries = moduleRootModel.getOrderEntries();
+    // A module library created during this import gets its order entry appended at the end,
+    // so searching from the end finds it without resolving every other library of the module.
+    for (int i = orderEntries.length - 1; i >= 0; i--) {
+      if (orderEntries[i] instanceof LibraryOrderEntry libraryOrderEntry && libraryOrderEntry.getLibrary() == library) {
+        return libraryOrderEntry;
+      }
+    }
     LibraryOrderEntry candidate = null;
-    for (OrderEntry orderEntry : moduleRootModel.getOrderEntries()) {
+    for (OrderEntry orderEntry : orderEntries) {
       if (orderEntry instanceof LibraryOrderEntry libraryOrderEntry) {
         Library orderEntryLibrary = libraryOrderEntry.getLibrary();
-        if (library == orderEntryLibrary) {
-          return libraryOrderEntry;
-        }
         // LibraryImpl.equals will return true for unrelated module library if it's just created and empty
         if (library.equals(orderEntryLibrary) && (candidate == null || libraryOrderEntry.getScope() == scope)) {
           candidate = libraryOrderEntry;
