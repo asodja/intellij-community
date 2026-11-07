@@ -88,7 +88,7 @@ public abstract class AbstractDependencyDataService<E extends AbstractDependency
                                                               final @NotNull Project project,
                                                               final @NotNull IdeModifiableModelsProvider modelsProvider) {
     return () -> {
-      MultiMap<String /*module name*/, String /*dep name*/> byModuleName = MultiMap.create();
+      MultiMap<String /*module name*/, String /*dep name*/> byModuleName = MultiMap.createSet();
       for (DataNode<E> node : toImport) {
         final E data = node.getData();
         Module ownerModule = modelsProvider.findIdeModule(data.getOwnerModule());
@@ -114,20 +114,23 @@ public abstract class AbstractDependencyDataService<E extends AbstractDependency
       List<I> orphanEntries = new SmartList<>();
       for (Module module : modelsProvider.getModules(projectData)) {
         for (OrderEntry entry : modelsProvider.getOrderEntries(module)) {
+          if (!getOrderEntryType().isInstance(entry)) {
+            continue;
+          }
+          final String moduleName = modifiableModuleModel.getActualName(entry.getOwnerModule());
+          //noinspection unchecked
+          if (byModuleName.get(moduleName).contains(getOrderEntryName(modelsProvider, (I)entry))) {
+            continue;
+          }
           // do not remove recently created library w/o name
+          // (checked last: the root URLs of a module library are computed from its entity snapshot)
           if (entry instanceof LibraryOrderEntry &&
               ((LibraryOrderEntry)entry).getLibraryName() == null &&
               ((LibraryOrderEntry)entry).getRootUrls(OrderRootType.CLASSES).length == 0) {
             continue;
           }
-          if (getOrderEntryType().isInstance(entry)) {
-            final String moduleName = modifiableModuleModel.getActualName(entry.getOwnerModule());
-            //noinspection unchecked
-            if (!byModuleName.get(moduleName).contains(getOrderEntryName(modelsProvider, (I)entry))) {
-              //noinspection unchecked
-              orphanEntries.add((I)entry);
-            }
-          }
+          //noinspection unchecked
+          orphanEntries.add((I)entry);
         }
       }
 
