@@ -44,7 +44,7 @@ class ScriptLibrariesTest {
 
     @Test
     fun `class jars are paired with the sources jars of the same name`() {
-        val ids = libraries().register(
+        val ids = libraries().registerAndFlush(
             script,
             files(GUAVA_JAR, COMMONS_IO_JAR, JSR305_JAR),
             files(COMMONS_IO_SOURCES_JAR, GUAVA_SOURCES_JAR),
@@ -61,7 +61,7 @@ class ScriptLibrariesTest {
     fun `sources jar of another version is not attached as sources`() {
         val otherSourcesJar = "$MODULES_CACHE/com.google.guava/guava/32.1.3-jre/9a8b7c/guava-32.1.3-jre-sources.jar"
 
-        val ids = libraries().register(script, files(GUAVA_JAR), files(otherSourcesJar))
+        val ids = libraries().registerAndFlush(script, files(GUAVA_JAR), files(otherSourcesJar))
 
         assertCollectionOrdered(ids) {
             assertElement { id ->
@@ -74,7 +74,7 @@ class ScriptLibrariesTest {
 
     @Test
     fun `source directories are attached by parent to every class root without a sources jar`() {
-        val ids = libraries().register(
+        val ids = libraries().registerAndFlush(
             script,
             files(GRADLE_CORE_JAR, BUILD_LOGIC_JAR, GUAVA_JAR),
             files(
@@ -96,7 +96,7 @@ class ScriptLibrariesTest {
 
     @Test
     fun `kotlin dsl accessors directories form one library with their source directories`() {
-        val ids = libraries().register(
+        val ids = libraries().registerAndFlush(
             script,
             files("$ACCESSORS_CACHE/9f8e7d/classes", "$ACCESSORS_CACHE/6c5b4a/classes", GRADLE_CORE_JAR),
             files("$ACCESSORS_CACHE/9f8e7d/src", "$ACCESSORS_CACHE/6c5b4a/src", "$GRADLE_DIST/src/core"),
@@ -117,7 +117,7 @@ class ScriptLibrariesTest {
         val kgpApiJar = "$MODULES_CACHE/org.jetbrains.kotlin/kotlin-gradle-plugin-api/2.0.20/b2c3d4/kotlin-gradle-plugin-api-2.0.20.jar"
         val kgpSourcesJar = "$MODULES_CACHE/org.jetbrains.kotlin/kotlin-gradle-plugin/2.0.20/c3d4e5/kotlin-gradle-plugin-2.0.20-sources.jar"
 
-        val ids = libraries().register(
+        val ids = libraries().registerAndFlush(
             script,
             files(kgpJar, GRADLE_CORE_JAR, KOTLIN_STDLIB_JAR, kgpApiJar),
             files(KOTLIN_STDLIB_SOURCES_JAR, kgpSourcesJar),
@@ -131,14 +131,37 @@ class ScriptLibrariesTest {
     }
 
     @Test
-    fun `library used by two scripts merges usages and sources`() {
+    fun `library used by two scripts of one batch is written once with both usages`() {
         val appScript = url("$PROJECT/app/build.gradle.kts")
         val libraries = libraries()
 
         val first = libraries.register(script, files(BUILD_LOGIC_JAR), files("$PROJECT/build-logic/src/main/kotlin"))
         val second = libraries.register(appScript, files(BUILD_LOGIC_JAR), files("$PROJECT/gradle/plugins/src/main/kotlin"))
+        assertEquals(first, second)
+        assertEquals(0, storage.entities(KotlinScriptLibraryEntity::class.java).count())
+
+        libraries.flush()
+
+        assertEquals(1, storage.entities(KotlinScriptLibraryEntity::class.java).count())
+        assertCollectionOrdered(second) {
+            assertLibrary(
+                classes = listOf(BUILD_LOGIC_JAR),
+                sources = setOf("$PROJECT/build-logic/src/main", "$PROJECT/gradle/plugins/src/main"),
+            )
+        }
+        assertEquals(setOf(script, appScript), storage.library(second.single()).usedInScripts)
+    }
+
+    @Test
+    fun `library registered after a flush merges into the existing entity`() {
+        val appScript = url("$PROJECT/app/build.gradle.kts")
+        val libraries = libraries()
+
+        val first = libraries.registerAndFlush(script, files(BUILD_LOGIC_JAR), files("$PROJECT/build-logic/src/main/kotlin"))
+        val second = libraries.registerAndFlush(appScript, files(BUILD_LOGIC_JAR), files("$PROJECT/gradle/plugins/src/main/kotlin"))
 
         assertEquals(first, second)
+        assertEquals(1, storage.entities(KotlinScriptLibraryEntity::class.java).count())
         assertCollectionOrdered(second) {
             assertLibrary(
                 classes = listOf(BUILD_LOGIC_JAR),
@@ -152,8 +175,8 @@ class ScriptLibrariesTest {
     fun `equal roots of different gradle projects get separate libraries`() {
         val otherScript = url("/home/dev/other/build.gradle.kts")
 
-        val first = libraries(projectPath = PROJECT).register(script, files(GUAVA_JAR), files(GUAVA_SOURCES_JAR))
-        val second = libraries(projectPath = "/home/dev/other").register(otherScript, files(GUAVA_JAR), files())
+        val first = libraries(projectPath = PROJECT).registerAndFlush(script, files(GUAVA_JAR), files(GUAVA_SOURCES_JAR))
+        val second = libraries(projectPath = "/home/dev/other").registerAndFlush(otherScript, files(GUAVA_JAR), files())
 
         assertNotEquals(first, second)
         assertEquals(2, storage.entities(KotlinScriptLibraryEntity::class.java).count())
@@ -169,7 +192,7 @@ class ScriptLibrariesTest {
 
     @Test
     fun `no sources are attached when sources are off`() {
-        val ids = libraries(attachSources = false).register(
+        val ids = libraries(attachSources = false).registerAndFlush(
             script,
             files(GUAVA_JAR, GRADLE_CORE_JAR),
             files(GUAVA_SOURCES_JAR, "$GRADLE_DIST/src/core"),
@@ -183,7 +206,7 @@ class ScriptLibrariesTest {
 
     @Test
     fun `marker groups keep their sources when sources are off`() {
-        val ids = libraries(attachSources = false).register(script, files(KOTLIN_STDLIB_JAR), files(KOTLIN_STDLIB_SOURCES_JAR))
+        val ids = libraries(attachSources = false).registerAndFlush(script, files(KOTLIN_STDLIB_JAR), files(KOTLIN_STDLIB_SOURCES_JAR))
 
         assertCollectionOrdered(ids) {
             assertLibrary(classes = listOf(KOTLIN_STDLIB_JAR), sources = setOf(KOTLIN_STDLIB_SOURCES_JAR))
@@ -202,6 +225,9 @@ class ScriptLibrariesTest {
         val entitySource = GradleKotlinDslScriptEntitySource(projectPath, GradleSyncPhase.SCRIPT_MODEL_PHASE)
         return ScriptLibraries(storage, entitySource, urlManager, attachSources)
     }
+
+    private fun ScriptLibraries.registerAndFlush(scriptUrl: VirtualFileUrl, classPath: List<File>, sourcePath: List<File>): List<KotlinScriptLibraryEntityId> =
+        register(scriptUrl, classPath, sourcePath).also { flush() }
 
     private fun files(vararg paths: String): List<File> = paths.map(::File)
 
