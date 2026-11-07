@@ -574,10 +574,12 @@ public abstract class AbstractModuleDataService<E extends ModuleData> extends Ab
       index++;
     }
 
+    boolean changed = !Arrays.equals(orderEntries, newOrder);
     if (LOG.isTraceEnabled()) {
-      boolean changed = !Arrays.equals(orderEntries, newOrder);
       LOG.trace(String.format("rearrange status (%s): %s", modifiableRootModel.getModule(), changed ? "modified" : "not modified"));
     }
-    modifiableRootModel.rearrangeOrderEntries(newOrder);
+    if (changed) {
+      modifiableRootModel.rearrangeOrderEntries(newOrder);
+    }
   }
 }
